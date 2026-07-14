@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lunar Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="kicker">Lunar Almanac · Toronto</p>
+      <h1 id="date-display">—</h1>
+      <nav class="date-nav" aria-label="Date selection">
+        <button id="prev-day" aria-label="Previous day">‹</button>
+        <input type="date" id="date-input" aria-label="Select date">
+        <button id="next-day" aria-label="Next day">›</button>
+        <button id="today-btn">Today</button>
+      </nav>
+      <div class="mode-toggle" role="group" aria-label="Zodiac mode">
+        <button id="mode-tropical">Tropical</button>
+        <button id="mode-sidereal">Sidereal</button>
+      </div>
+    </header>
+
+    <main>
+      <div class="card">
+        <div class="card-top">
+          <div id="moon-icon"></div>
+          <div>
+            <h2 id="phase-name">—</h2>
+            <p id="illum">—</p>
+            <p id="moon-sign">—</p>
+          </div>
+        </div>
+        <dl class="times">
+          <div><dt>Moonrise</dt><dd id="moonrise">—</dd></div>
+          <div><dt>Moonset</dt><dd id="moonset">—</dd></div>
+          <div><dt>Sunrise</dt><dd id="sunrise">—</dd></div>
+          <div><dt>Sunset</dt><dd id="sunset">—</dd></div>
+        </dl>
+      </div>
+
+      <div id="transits"></div>
+
+      <div id="affirmations"></div>
+
+      <div id="readings"></div>
+    </main>
+
+    <footer>Computed in-browser with Astronomy Engine · Natal houses: Placidus</footer>
+  </div>
+
+  <script src="astronomy.browser.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
