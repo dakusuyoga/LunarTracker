@@ -231,6 +231,11 @@
     const phaseAngle = Astronomy.MoonPhase(noon);
     const illum = Astronomy.Illumination("Moon", noon).phase_fraction;
 
+    // Reference instant for time-of-day sensitive features: the live clock
+    // when viewing today, otherwise local noon of the selected date.
+    const isToday = sameLocalDate(sel, localDateOf(new Date()));
+    const refTime = isToday ? new Date() : noon;
+
     const moon = riseSet("Moon", dayStart, dayEnd);
     const sun = riseSet("Sun", dayStart, dayEnd);
 
@@ -249,9 +254,9 @@
 
     let phase = phaseName(phaseAngle);
     if (quarterEvents.newMoon) phase = "New Moon";
-    else if (quarterEvents.firstQuarter) phase = "First Quarter";
+    else if (quarterEvents.firstQuarter) phase = "Waxing Quarter Moon";
     else if (quarterEvents.fullMoon) phase = "Full Moon";
-    else if (quarterEvents.lastQuarter) phase = "Last Quarter";
+    else if (quarterEvents.lastQuarter) phase = "Waning Quarter Moon";
 
     // New/full moon ±12h window: show the event's text when any part of
     // this local day overlaps [exact instant − 12h, exact instant + 12h].
@@ -262,7 +267,14 @@
       if (!t) return null;
       const eyf = yearFractionOf(t);
       const lon = modal(moonLonTropical(t), eyf);
-      return { instant: t, lon, house: houseOf(lon, cusps) };
+      // Is this syzygy an eclipse? (An eclipse's greatest instant sits
+      // within minutes of the exact new/full moon.)
+      const kind = targetLon === 0 ? "solar" : "lunar";
+      const isEclipse = ECLIPSES.some((e) =>
+        e.kind === kind && Math.abs(new Date(e.utc) - t) < 12 * HOUR);
+      // Eclipse wording is used only within ±2h of the exact event.
+      const eclipseActive = isEclipse && Math.abs(refTime - t) <= 2 * HOUR;
+      return { instant: t, lon, house: houseOf(lon, cusps), isEclipse, eclipseActive };
     };
     const newMoonWindow = windowEvent(0);
     const fullMoonWindow = windowEvent(180);
@@ -271,11 +283,9 @@
     const quarterSign = (t) => t && modal(moonLonTropical(t), yearFractionOf(t));
 
     // New Moon affirmations: active from the exact New Moon instant until
-    // 28 days later, keyed by the natal house of that New Moon. For today
-    // the actual clock time decides (the quotes switch over at the exact
-    // instant); for other dates, local noon.
-    const isToday = sameLocalDate(sel, localDateOf(new Date()));
-    const affRef = isToday ? new Date() : noon;
+    // 28 days later, keyed by the natal house of that New Moon. refTime
+    // decides — so on the day itself the quotes appear at the exact instant.
+    const affRef = refTime;
     let affirmations = null;
     {
       // Walk forward to the most recent New Moon at or before affRef.
@@ -336,21 +346,48 @@
   const esc = (s) => String(s).replace(/[&<>"]/g,
     (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 
-  // Renders a pasted CONTENT entry verbatim, with light structure:
-  // lines starting with ◗ become sub-headings, the first line becomes the
-  // entry's title line, blank lines separate paragraphs.
-  function contentOr(text) {
-    if (!text) return `<p class="reading pending">— content pending —</p>`;
-    const lines = String(text).split("\n");
-    const hasMarks = lines.some((l) => l.trim().startsWith("◗"));
+  // Case-aware phrase swap: "Full Moon" -> "Lunar Eclipse", "full moon" ->
+  // "lunar eclipse" (any other capitalization gets the title-case form).
+  function swapPhrase(text, from, to) {
+    const re = new RegExp(from.replace(" ", "\\s+"), "gi");
+    return text.replace(re, (m) => (m === m.toLowerCase() ? to.toLowerCase() : to));
+  }
+
+  // Renders a pasted CONTENT entry, with light structure: lines starting
+  // with ◗ become sub-headings, blank lines separate paragraphs.
+  // opts.stripTitle: the widget's section heading already names the event,
+  //   so a first line like "Full Moon (or lunar eclipse) in your 12th House
+  //   (Also known as your Secrets Zone)" is reduced to just its trailing
+  //   parenthetical ("Also known as your Secrets Zone"), or removed
+  //   entirely when there is none.
+  // opts.eclipse ('solar'|'lunar'): the event is an eclipse — rewrite
+  //   "New Moon"/"Full Moon" in the text as "Solar/Lunar Eclipse".
+  function contentOr(text, opts) {
+    opts = opts || {};
+    if (!text || !String(text).trim()) {
+      return `<p class="reading pending">— content pending —</p>`;
+    }
+    let lines = String(text).split("\n");
+    let title = null;
+    if (opts.stripTitle) {
+      const first = (lines[0] || "").trim();
+      if (/^[‘’'"“”]?\s*(daily|new|full)\s+moon\b/i.test(first)) {
+        const paren = /\(([^()]*)\)\s*$/.exec(first);
+        if (paren) title = paren[1].trim();
+        lines = lines.slice(1);
+      }
+    }
+    let body = lines.join("\n");
+    if (opts.eclipse === "lunar") body = swapPhrase(body, "full moon", "Lunar Eclipse");
+    if (opts.eclipse === "solar") body = swapPhrase(body, "new moon", "Solar Eclipse");
+
     const out = [];
-    lines.forEach((raw, i) => {
+    if (title) out.push(`<p class="reading-title">${esc(title)}</p>`);
+    body.split("\n").forEach((raw) => {
       const line = raw.trim();
       if (!line) return;
       if (line.startsWith("◗")) {
         out.push(`<h4 class="reading-h"><span class="mark">◗ </span>${esc(line.slice(1).trim())}</h4>`);
-      } else if (i === 0 && hasMarks) {
-        out.push(`<p class="reading-title">${esc(line)}</p>`);
       } else {
         out.push(`<p class="reading">${esc(line)}</p>`);
       }
@@ -403,50 +440,60 @@
       .map((t) => `<p class="affirmation">‘${esc(t)}’</p>`)
       .join("");
 
-    // When viewing today, re-render at the exact instant of the next New
-    // Moon so the affirmations switch over on time.
+    // When viewing today, re-render at the next time-sensitive boundary:
+    // the exact instant of the next New Moon (affirmations switch), or the
+    // edges of an eclipse's ±2h wording window.
     clearTimeout(affirmationTimer);
     if (day.isToday) {
+      const candidates = [];
       const next = Astronomy.SearchMoonPhase(0, new Date(), 32);
-      if (next) {
-        const ms = next.date.getTime() - Date.now();
-        if (ms > 0 && ms < 36 * HOUR) {
-          affirmationTimer = setTimeout(render, ms + 2000);
+      if (next) candidates.push(next.date.getTime());
+      for (const w of [day.newMoonWindow, day.fullMoonWindow]) {
+        if (w && w.isEclipse) {
+          candidates.push(w.instant.getTime() - 2 * HOUR, w.instant.getTime() + 2 * HOUR);
         }
+      }
+      const waits = candidates
+        .map((t) => t - Date.now())
+        .filter((ms) => ms > 0 && ms < 36 * HOUR);
+      if (waits.length) {
+        affirmationTimer = setTimeout(render, Math.min(...waits) + 2000);
       }
     }
 
     // Interpretive sections
     const parts = [];
     parts.push(section(`Moon in ${SIGNS[signIdx]}`,
-      contentOr(CONTENT.dailyMoonInSign[signKey(day.moonLon)])));
+      contentOr(CONTENT.dailyMoonInSign[signKey(day.moonLon)], { stripTitle: true })));
     parts.push(section(`Moon in your ${ORDINALS[day.house]} house`,
-      contentOr(CONTENT.dailyMoonInHouse[day.house])));
+      contentOr(CONTENT.dailyMoonInHouse[day.house], { stripTitle: true })));
 
     if (day.newMoonWindow) {
       const w = day.newMoonWindow;
-      const label = day.eclipse && day.eclipse.kind === "solar" ? "Solar Eclipse" : "New Moon";
+      const label = w.eclipseActive ? "Solar Eclipse" : "New Moon";
+      const o = { stripTitle: true, eclipse: w.eclipseActive ? "solar" : null };
       parts.push(section(`${label} in ${signName(w.lon)}`,
-        contentOr(CONTENT.newMoonInSign[signKey(w.lon)])));
+        contentOr(CONTENT.newMoonInSign[signKey(w.lon)], o)));
       parts.push(section(`${label} in your ${ORDINALS[w.house]} house`,
-        contentOr(CONTENT.newMoonInHouse[w.house])));
+        contentOr(CONTENT.newMoonInHouse[w.house], o)));
     }
     if (day.fullMoonWindow) {
       const w = day.fullMoonWindow;
-      const label = day.eclipse && day.eclipse.kind === "lunar" ? "Lunar Eclipse" : "Full Moon";
+      const label = w.eclipseActive ? "Lunar Eclipse" : "Full Moon";
+      const o = { stripTitle: true, eclipse: w.eclipseActive ? "lunar" : null };
       parts.push(section(`${label} in ${signName(w.lon)}`,
-        contentOr(CONTENT.fullMoonInSign[signKey(w.lon)])));
+        contentOr(CONTENT.fullMoonInSign[signKey(w.lon)], o)));
       parts.push(section(`${label} in your ${ORDINALS[w.house]} house`,
-        contentOr(CONTENT.fullMoonInHouse[w.house])));
+        contentOr(CONTENT.fullMoonInHouse[w.house], o)));
     }
     if (day.quarterEvents.firstQuarter) {
       const lon = day.quarterSign(day.quarterEvents.firstQuarter);
-      parts.push(section(`First Quarter in ${signName(lon)}`,
+      parts.push(section(`Waxing Quarter Moon in ${signName(lon)}`,
         contentOr(CONTENT.firstQuarterInSign[signKey(lon)])));
     }
     if (day.quarterEvents.lastQuarter) {
       const lon = day.quarterSign(day.quarterEvents.lastQuarter);
-      parts.push(section(`Last Quarter in ${signName(lon)}`,
+      parts.push(section(`Waning Quarter Moon in ${signName(lon)}`,
         contentOr(CONTENT.lastQuarterInSign[signKey(lon)])));
     }
     $("readings").innerHTML = parts.join('<hr class="rule">');
